@@ -1,6 +1,6 @@
 // ============================================================
-// GORDAOMOD - API DE LICENCIAMENTO ONLINE v2.0
-// Storage: PostgreSQL (se DATABASE_URL existir) ou SQLite (fallback)
+// GORDAOMOD - API DE LICENCIAMENTO ONLINE v2.1
+// Storage: PostgreSQL (se DATABASE_URL existir) ou SQLite em memoria (sql.js)
 // Compativel com Render.com - nunca crasha por falta de DB
 // ============================================================
 const express = require('express');
@@ -17,61 +17,64 @@ const PAYLOAD_KEY = process.env.PAYLOAD_KEY || 'GordaoMod2025XY';
 const DATABASE_URL = process.env.DATABASE_URL;
 
 // ============================================================
-// DATABASE LAYER - suporta Postgres (producao) e SQLite (fallback)
+// DATABASE LAYER - suporta Postgres (producao) e SQLite em memoria (fallback)
 // ============================================================
 let db;
 let usePostgres = false;
+let sqliteReady = false;
 
-if (DATABASE_URL) {
-    try {
-        const { Pool } = require('pg');
-        db = new Pool({
-            connectionString: DATABASE_URL,
-            ssl: { rejectUnauthorized: false },
-            max: 5,
-            idleTimeoutMillis: 30000,
-            connectionTimeoutMillis: 10000
-        });
-        usePostgres = true;
-        console.log('[DB] PostgreSQL detectado - modo producao');
+async function initDB() {
+    if (DATABASE_URL) {
+        try {
+            const { Pool } = require('pg');
+            db = new Pool({
+                connectionString: DATABASE_URL,
+                ssl: { rejectUnauthorized: false },
+                max: 5,
+                idleTimeoutMillis: 30000,
+                connectionTimeoutMillis: 10000
+            });
+            usePostgres = true;
+            console.log('[DB] PostgreSQL detectado - modo producao');
 
-        db.query(`
-            CREATE TABLE IF NOT EXISTS keys (
-                key TEXT PRIMARY KEY,
-                type TEXT NOT NULL,
-                expires_at BIGINT,
-                hwid TEXT,
-                created_at BIGINT NOT NULL,
-                last_used_at BIGINT,
-                last_ip TEXT,
-                use_count INT DEFAULT 0,
-                revoked BOOLEAN DEFAULT FALSE,
-                note TEXT
-            );
-            CREATE TABLE IF NOT EXISTS logs (
-                id BIGSERIAL PRIMARY KEY,
-                key TEXT,
-                ip TEXT,
-                hwid TEXT,
-                action TEXT,
-                success BOOLEAN,
-                detail TEXT,
-                ts BIGINT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_logs_ts ON logs(ts DESC);
-        `).then(() => console.log('[DB] Tabelas Postgres verificadas'))
-          .catch(e => console.error('[DB] Erro init Postgres:', e.message));
-    } catch (e) {
-        console.log('[DB] pg nao disponivel, caindo pra SQLite');
+            await db.query(`
+                CREATE TABLE IF NOT EXISTS keys (
+                    key TEXT PRIMARY KEY,
+                    type TEXT NOT NULL,
+                    expires_at BIGINT,
+                    hwid TEXT,
+                    created_at BIGINT NOT NULL,
+                    last_used_at BIGINT,
+                    last_ip TEXT,
+                    use_count INT DEFAULT 0,
+                    revoked BOOLEAN DEFAULT FALSE,
+                    note TEXT
+                );
+                CREATE TABLE IF NOT EXISTS logs (
+                    id BIGSERIAL PRIMARY KEY,
+                    key TEXT,
+                    ip TEXT,
+                    hwid TEXT,
+                    action TEXT,
+                    success BOOLEAN,
+                    detail TEXT,
+                    ts BIGINT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_logs_ts ON logs(ts DESC);
+            `);
+            console.log('[DB] Tabelas Postgres verificadas');
+            return;
+        } catch (e) {
+            console.error('[DB] Erro init Postgres:', e.message, '- caindo pra SQLite');
+            usePostgres = false;
+        }
     }
-}
 
-if (!usePostgres) {
-    const Database = require('better-sqlite3');
-    const dbPath = process.env.DB_PATH || path.join(__dirname, 'data.db');
-    db = new Database(dbPath);
-    db.pragma('journal_mode = WAL');
-    db.exec(`
+    // SQLite em memoria via sql.js (sem compilação nativa)
+    const initSqlJs = require('sql.js');
+    const SQL = await initSqlJs();
+    db = new SQL.Database();
+    db.run(`
         CREATE TABLE IF NOT EXISTS keys (
             key TEXT PRIMARY KEY,
             type TEXT NOT NULL,
@@ -96,18 +99,48 @@ if (!usePostgres) {
         );
         CREATE INDEX IF NOT EXISTS idx_logs_ts ON logs(ts DESC);
     `);
-    console.log('[DB] SQLite inicializado em:', dbPath);
+    sqliteReady = true;
+    console.log('[DB] SQLite (sql.js) inicializado em memoria');
 }
 
 // ============================================================
 // DB HELPERS - abstrai Postgres vs SQLite
 // ============================================================
+function sqliteExec(sql, params) {
+    const stmt = db.prepare(sql);
+    stmt.bind(params);
+    stmt.step();
+    stmt.free();
+}
+
+function sqliteGetOne(sql, params) {
+    const stmt = db.prepare(sql);
+    stmt.bind(params);
+    let row = null;
+    if (stmt.step()) {
+        row = stmt.getAsObject();
+    }
+    stmt.free();
+    return row;
+}
+
+function sqliteGetAll(sql, params) {
+    const stmt = db.prepare(sql);
+    if (params && params.length) stmt.bind(params);
+    const rows = [];
+    while (stmt.step()) {
+        rows.push(stmt.getAsObject());
+    }
+    stmt.free();
+    return rows;
+}
+
 async function dbGetKey(key) {
     if (usePostgres) {
         const r = await db.query('SELECT * FROM keys WHERE key=$1', [key]);
         return r.rows[0] || null;
     } else {
-        return db.prepare('SELECT * FROM keys WHERE key=?').get(key) || null;
+        return sqliteGetOne('SELECT * FROM keys WHERE key=?', [key]);
     }
 }
 
@@ -116,8 +149,8 @@ async function dbInsertKey(key, type, expires_at, created_at, note) {
         await db.query('INSERT INTO keys (key,type,expires_at,created_at,note) VALUES ($1,$2,$3,$4,$5)',
             [key, type, expires_at, created_at, note || null]);
     } else {
-        db.prepare('INSERT INTO keys (key,type,expires_at,created_at,note) VALUES (?,?,?,?,?)')
-            .run(key, type, expires_at, created_at, note || null);
+        sqliteExec('INSERT INTO keys (key,type,expires_at,created_at,note) VALUES (?,?,?,?,?)',
+            [key, type, expires_at, created_at, note || null]);
     }
 }
 
@@ -126,7 +159,7 @@ async function dbAllKeys() {
         const r = await db.query('SELECT * FROM keys ORDER BY created_at DESC LIMIT 500');
         return r.rows.map(row => ({ ...row, revoked: !!row.revoked, use_count: row.use_count || 0 }));
     } else {
-        return db.prepare('SELECT * FROM keys ORDER BY created_at DESC LIMIT 500').all()
+        return sqliteGetAll('SELECT * FROM keys ORDER BY created_at DESC LIMIT 500', [])
             .map(r => ({ ...r, revoked: !!r.revoked, use_count: r.use_count || 0 }));
     }
 }
@@ -136,8 +169,8 @@ async function dbUpdateRevoked(key, revoked) {
         const r = await db.query('UPDATE keys SET revoked=$1 WHERE key=$2', [revoked, key]);
         return r.rowCount > 0;
     } else {
-        const r = db.prepare('UPDATE keys SET revoked=? WHERE key=?').run(revoked ? 1 : 0, key);
-        return r.changes > 0;
+        sqliteExec('UPDATE keys SET revoked=? WHERE key=?', [revoked ? 1 : 0, key]);
+        return db.getRowsModified() > 0;
     }
 }
 
@@ -146,8 +179,8 @@ async function dbResetHwid(key) {
         const r = await db.query('UPDATE keys SET hwid=NULL WHERE key=$1', [key]);
         return r.rowCount > 0;
     } else {
-        const r = db.prepare('UPDATE keys SET hwid=NULL WHERE key=?').run(key);
-        return r.changes > 0;
+        sqliteExec('UPDATE keys SET hwid=NULL WHERE key=?', [key]);
+        return db.getRowsModified() > 0;
     }
 }
 
@@ -156,8 +189,8 @@ async function dbDeleteKey(key) {
         const r = await db.query('DELETE FROM keys WHERE key=$1', [key]);
         return r.rowCount > 0;
     } else {
-        const r = db.prepare('DELETE FROM keys WHERE key=?').run(key);
-        return r.changes > 0;
+        sqliteExec('DELETE FROM keys WHERE key=?', [key]);
+        return db.getRowsModified() > 0;
     }
 }
 
@@ -165,7 +198,7 @@ async function dbSetHwid(key, hwid) {
     if (usePostgres) {
         await db.query('UPDATE keys SET hwid=$1 WHERE key=$2', [hwid, key]);
     } else {
-        db.prepare('UPDATE keys SET hwid=? WHERE key=?').run(hwid, key);
+        sqliteExec('UPDATE keys SET hwid=? WHERE key=?', [hwid, key]);
     }
 }
 
@@ -175,8 +208,8 @@ async function dbUpdateUsage(key, ip) {
         await db.query('UPDATE keys SET last_used_at=$1, last_ip=$2, use_count=use_count+1 WHERE key=$3',
             [now, ip, key]);
     } else {
-        db.prepare('UPDATE keys SET last_used_at=?, last_ip=?, use_count=use_count+1 WHERE key=?')
-            .run(now, ip, key);
+        sqliteExec('UPDATE keys SET last_used_at=?, last_ip=?, use_count=use_count+1 WHERE key=?',
+            [now, ip, key]);
     }
 }
 
@@ -185,7 +218,7 @@ async function dbAllLogs() {
         const r = await db.query('SELECT * FROM logs ORDER BY ts DESC LIMIT 200');
         return r.rows;
     } else {
-        return db.prepare('SELECT * FROM logs ORDER BY ts DESC LIMIT 200').all();
+        return sqliteGetAll('SELECT * FROM logs ORDER BY ts DESC LIMIT 200', []);
     }
 }
 
@@ -197,9 +230,9 @@ async function dbStats() {
         const usadas = (await db.query('SELECT COUNT(*)::int AS c FROM keys WHERE last_used_at IS NOT NULL')).rows[0].c;
         return { total, ativas, usadas };
     } else {
-        const total = db.prepare('SELECT COUNT(*) as c FROM keys').get().c;
-        const ativas = db.prepare('SELECT COUNT(*) as c FROM keys WHERE revoked=0 AND (expires_at IS NULL OR expires_at > ?)').get(now).c;
-        const usadas = db.prepare('SELECT COUNT(*) as c FROM keys WHERE last_used_at IS NOT NULL').get().c;
+        const total = sqliteGetOne('SELECT COUNT(*) as c FROM keys', []).c;
+        const ativas = sqliteGetOne('SELECT COUNT(*) as c FROM keys WHERE revoked=0 AND (expires_at IS NULL OR expires_at > ?)', [now]).c;
+        const usadas = sqliteGetOne('SELECT COUNT(*) as c FROM keys WHERE last_used_at IS NOT NULL', []).c;
         return { total, ativas, usadas };
     }
 }
@@ -211,8 +244,8 @@ async function logEvent(key, ip, hwid, action, success, detail) {
             await db.query('INSERT INTO logs (key,ip,hwid,action,success,detail,ts) VALUES ($1,$2,$3,$4,$5,$6,$7)',
                 [key, ip, hwid, action, !!success, detail, ts]);
         } else {
-            db.prepare('INSERT INTO logs (key,ip,hwid,action,success,detail,ts) VALUES (?,?,?,?,?,?,?)')
-                .run(key, ip, hwid, action, success ? 1 : 0, detail, ts);
+            sqliteExec('INSERT INTO logs (key,ip,hwid,action,success,detail,ts) VALUES (?,?,?,?,?,?,?)',
+                [key, ip, hwid, action, success ? 1 : 0, detail, ts]);
         }
     } catch (e) { console.error('log err', e.message); }
 }
@@ -366,10 +399,18 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-app.listen(PORT, () => {
-    console.log('================================================');
-    console.log('  GORDAOMOD - API ONLINE (' + (usePostgres ? 'PostgreSQL' : 'SQLite') + ')');
-    console.log('  http://localhost:' + PORT);
-    console.log('  Login Admin: ' + ADMIN_USER + ' / ' + ADMIN_PASS);
-    console.log('================================================');
+// ============================================================
+// START
+// ============================================================
+initDB().then(() => {
+    app.listen(PORT, () => {
+        console.log('================================================');
+        console.log('  GORDAOMOD - API ONLINE (' + (usePostgres ? 'PostgreSQL' : 'SQLite sql.js') + ')');
+        console.log('  http://localhost:' + PORT);
+        console.log('  Login Admin: ' + ADMIN_USER + ' / ' + ADMIN_PASS);
+        console.log('================================================');
+    });
+}).catch(e => {
+    console.error('Falha ao iniciar DB:', e);
+    process.exit(1);
 });
