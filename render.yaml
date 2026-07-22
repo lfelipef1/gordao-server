@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: rack-gordao
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      - key: ADMIN_USER
+        value: admin
+      - key: ADMIN_PASS
+        value: gordao2025
+      - key: PAYLOAD_KEY
+        value: GordaoMod2025XY
+      - key: JWT_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false

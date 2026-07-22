@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+<meta charset="UTF-8">
+<title>GordaoMod - Painel de Licenças</title>
+<style>
+:root { --bg:#0a0a0a; --card:#111; --border:#222; --acc:#7c3aed; --acc-b:#6d28d9; --ok:#16a34a; --err:#dc2626; --txt:#f5f5f5; --mut:#737373; --glow:rgba(124,58,237,0.08); }
+*{margin:0;padding:0;box-sizing:border-box;font-family:'Inter','Segoe UI',system-ui,sans-serif}
+body{background:var(--bg);color:var(--txt);min-height:100vh}
+.container{max-width:1200px;margin:0 auto;padding:24px}
+h1{color:var(--txt);font-size:20px;font-weight:700;letter-spacing:-.3px}
+.sub{color:var(--mut);font-size:12px;margin-top:2px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:16px}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+input,select,button{background:#0a0a0a;color:var(--txt);border:1px solid var(--border);border-radius:6px;padding:10px 14px;font-size:13px;outline:none;transition:.15s}
+input:focus,select:focus{border-color:var(--acc)}
+button{cursor:pointer;background:var(--acc);border-color:var(--acc);color:#fff;font-weight:600;transition:.15s}
+button:hover{background:var(--acc-b)}
+button.danger{background:var(--err);border-color:var(--err)}
+button.warn{background:#ca8a04;border-color:#ca8a04;color:#000}
+button.ok{background:var(--ok);border-color:var(--ok)}
+button.ghost{background:transparent;border-color:#333;color:var(--mut);font-weight:500}
+button.ghost:hover{color:var(--txt);border-color:#555}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--border)}
+th{color:var(--mut);font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.5px;background:var(--card)}
+.tag{display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600}
+.tag.ok{background:rgba(22,163,74,.15);color:var(--ok)}
+.tag.err{background:rgba(220,38,38,.15);color:var(--err)}
+.tag.warn{background:rgba(202,138,4,.15);color:#ca8a04}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px}
+.stat{background:linear-gradient(135deg,var(--card) 0%,#161616 100%);border:1px solid var(--border);border-radius:10px;padding:16px 20px;box-shadow:0 2px 12px rgba(0,0,0,0.3);transition:.2s}.stat:hover{border-color:#333;transform:translateY(-2px)}
+.stat .v{font-size:28px;font-weight:800;color:var(--acc);letter-spacing:-1px}
+.stat .l{font-size:10px;color:var(--mut);text-transform:uppercase;letter-spacing:.5px;margin-top:2px}
+.login{max-width:380px;margin:80px auto}
+.hide{display:none}
+.copy{cursor:pointer;color:var(--acc);font-family:'SF Mono','Courier New',monospace;font-size:11px;white-space:nowrap}
+.copy:hover{text-decoration:underline}
+.empty{text-align:center;color:var(--mut);padding:40px;font-size:13px}
+.actions{display:flex;gap:4px;flex-wrap:nowrap;align-items:center}
+.actions button{padding:5px 10px;font-size:11px;border-radius:4px}
+.tabs{display:flex;gap:8px;margin-bottom:16px;border-bottom:1px solid var(--border);padding-bottom:0}
+.tab{padding:10px 20px;background:transparent;border:none;border-bottom:2px solid transparent;border-radius:0;cursor:pointer;font-weight:500;font-size:13px;color:var(--mut);transition:.15s}
+.tab.active{border-bottom-color:var(--acc);color:var(--txt)}
+.tab:hover:not(.active){color:var(--txt)}
+.header{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;padding:20px 0;border-bottom:1px solid var(--border)}
+.brand{display:flex;flex-direction:column;align-items:flex-start;gap:8px}
+.brand img{width:280px;height:auto;display:block;filter:drop-shadow(0 0 16px rgba(124,58,237,0.5))}
+.brand-sub{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:4px;margin-top:4px}
+.header-right{display:flex;align-items:center;gap:20px}
+.mini-stats{display:flex;gap:28px;align-items:center}
+.mini-stats>div{text-align:center}
+.mini-stats .v{font-size:26px;font-weight:800;color:var(--acc);letter-spacing:-1px;line-height:1}
+.mini-stats .l{font-size:10px;color:var(--mut);text-transform:uppercase;letter-spacing:.5px;margin-top:4px}
+.search{width:240px}
+.search input{width:100%;padding-left:32px;background:url('data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2214%22 height=%2214%22 fill=%22%23666%22 viewBox=%220 0 16 16%22><path d=%22M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001c.03.04.062.078.098.115l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85a1.007 1.007 0 0 0-.115-.1zM12 6.5a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0z%22/></svg>') no-repeat 10px center;background-size:14px}
+.save-pass{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--mut);margin-top:2px}
+.save-pass input{width:auto;margin:0}
+.key-col{white-space:nowrap;max-width:200px;overflow:hidden;text-overflow:ellipsis}
+.hwid-col{white-space:nowrap;max-width:120px;overflow:hidden;text-overflow:ellipsis}
+.note-col{white-space:nowrap;max-width:150px;overflow:hidden;text-overflow:ellipsis;color:var(--mut)}
+.section-title{font-size:14px;font-weight:600;margin-bottom:12px;color:var(--txt)}
+.scroll-x{overflow-x:auto}
+</style>
+</head>
+<body>
+
+<div id="login" class="container login">
+    <div class="card" style="text-align:center">
+        <div style="margin-bottom:20px">
+            <img src="logo.png" alt="GordaoMod" style="height:100px;margin-bottom:16px;filter:drop-shadow(0 0 16px rgba(124,58,237,0.45))">
+            <h1 style="font-size:22px">GordaoMod</h1>
+            <div class="sub">Painel Administrativo</div>
+        </div>
+        <div class="row" style="flex-direction:column;align-items:stretch;gap:10px">
+            <input id="user" placeholder="Usuário" value="admin">
+            <input id="pass" placeholder="Senha" type="password">
+            <label class="save-pass" style="justify-content:center"><input type="checkbox" id="savePass" checked> Salvar senha</label>
+            <button onclick="login()" style="margin-top:4px">Entrar</button>
+            <div id="loginErr" style="color:var(--err);font-size:12px;margin-top:4px"></div>
+        </div>
+    </div>
+</div>
+
+<div id="app" class="container hide">
+    <div class="header">
+        <div class="brand">
+            <img src="logo.png" alt="GordaoMod">
+            <div class="brand-sub">Painel de Licenciamento</div>
+        </div>
+        <div class="header-right">
+            <div class="mini-stats">
+                <div><div class="v" id="sTotal">0</div><div class="l">Total</div></div>
+                <div><div class="v" id="sAtivas">0</div><div class="l">Ativas</div></div>
+                <div><div class="v" id="sUsadas">0</div><div class="l">Em Uso</div></div>
+            </div>
+            <button class="ghost" onclick="logout()">Sair</button>
+        </div>
+    </div>
+
+    <div class="tabs">
+        <div class="tab active" onclick="showTab('keys')">Chaves</div>
+        <div class="tab" onclick="showTab('logs')">Logs</div>
+    </div>
+
+    <div id="tab-keys">
+        <div class="card">
+            <div class="section-title">Gerar Nova Chave</div>
+            <div class="row">
+                <select id="newType">
+                    <option value="time">Por dias</option>
+                    <option value="unlimited">Ilimitada</option>
+                </select>
+                <input id="newDays" type="number" placeholder="Dias" value="30" style="width:80px">
+                <input id="newNote" placeholder="Anotacao (cliente, etc)" style="flex:1;min-width:180px">
+                <button onclick="gerar()">Gerar</button>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:12px">
+                <div class="section-title" style="margin:0">Chaves</div>
+                <div class="search"><input id="searchKey" placeholder="Buscar..." oninput="filterKeys()"></div>
+            </div>
+            <div class="scroll-x">
+            <table>
+                <thead><tr><th>Chave</th><th>Tipo</th><th>Expira</th><th>HWID</th><th>Uso</th><th>Status</th><th>Nota</th><th></th></tr></thead>
+                <tbody id="keysBody"><tr><td colspan="8" class="empty">Carregando...</td></tr></tbody>
+            </table>
+            </div>
+        </div>
+    </div>
+
+    <div id="tab-logs" class="hide">
+        <div class="card">
+            <div class="section-title">Logs de Acesso</div>
+            <div class="scroll-x">
+            <table>
+                <thead><tr><th>Quando</th><th>Chave</th><th>IP</th><th>HWID</th><th>Acao</th><th>Resultado</th></tr></thead>
+                <tbody id="logsBody"></tbody>
+            </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+let token = localStorage.getItem('token');
+
+let allKeys = [];
+function showLogin(err) {
+    document.getElementById('login').classList.remove('hide');
+    document.getElementById('app').classList.add('hide');
+    if (err) document.getElementById('loginErr').textContent = err;
+    const su = localStorage.getItem('savedUser');
+    const sp = localStorage.getItem('savedPass');
+    if (su) document.getElementById('user').value = su;
+    if (sp) document.getElementById('pass').value = sp;
+}
+function showApp() {
+    document.getElementById('login').classList.add('hide');
+    document.getElementById('app').classList.remove('hide');
+    refresh();
+}
+async function login() {
+    const user = document.getElementById('user').value;
+    const pass = document.getElementById('pass').value;
+    const save = document.getElementById('savePass').checked;
+    const r = await fetch('/api/login', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({user,pass}) });
+    if (!r.ok) return showLogin('Login inválido');
+    const j = await r.json();
+    token = j.token;
+    localStorage.setItem('token', token);
+    if (save) { localStorage.setItem('savedUser', user); localStorage.setItem('savedPass', pass); }
+    else { localStorage.removeItem('savedUser'); localStorage.removeItem('savedPass'); }
+    showApp();
+}
+function logout() {
+    localStorage.removeItem('token');
+    token = null;
+    showLogin();
+}
+async function api(path, opts = {}) {
+    opts.headers = { 'Content-Type':'application/json', 'Authorization':'Bearer ' + token, ...(opts.headers||{}) };
+    const r = await fetch(path, opts);
+    if (r.status === 401) { logout(); throw new Error('auth'); }
+    return r.json();
+}
+async function refresh() {
+    const stats = await api('/api/stats');
+    document.getElementById('sTotal').textContent = stats.total;
+    document.getElementById('sAtivas').textContent = stats.ativas;
+    document.getElementById('sUsadas').textContent = stats.usadas;
+
+    const keys = await api('/api/keys');
+    allKeys = keys;
+    renderKeys(keys);
+
+    const logs = await api('/api/logs');
+    renderLogs(logs);
+}
+function renderKeys(keys) {
+    const tb = document.getElementById('keysBody');
+    if (!keys.length) { tb.innerHTML = '<tr><td colspan="8" class="empty">Nenhuma chave ainda</td></tr>'; return; }
+    tb.innerHTML = keys.map(k => {
+        const exp = k.expires_at ? new Date(k.expires_at*1000).toLocaleString('pt-BR') : '∞';
+        const now = Date.now()/1000;
+        let status = '<span class="tag ok">Ativa</span>';
+        if (k.revoked) status = '<span class="tag err">Revogada</span>';
+        else if (k.expires_at && k.expires_at < now) status = '<span class="tag warn">Expirada</span>';
+        return `<tr>
+            <td class="key-col" title="${k.key}"><span class="copy" onclick="navigator.clipboard.writeText('${k.key}');this.textContent='Copiado';setTimeout(()=>this.textContent='${k.key}',1500)">${k.key}</span></td>
+            <td>${k.type === 'unlimited' ? '∞ Ilimitada' : 'Tempo'}</td>
+            <td>${exp}</td>
+            <td class="hwid-col" title="${k.hwid||''}">${k.hwid ? k.hwid.substr(0,12)+'...' : '<span style="color:var(--mut)">livre</span>'}</td>
+            <td>${k.use_count}x</td>
+            <td>${status}</td>
+            <td class="note-col" title="${k.note||''}">${k.note||''}</td>
+            <td><div class="actions">
+                ${k.revoked ? `<button class="ok" onclick="action('${k.key}','unrevoke')">Reativar</button>` : `<button class="warn" onclick="action('${k.key}','revoke')">Revogar</button>`}
+                ${k.hwid ? `<button class="ghost" onclick="action('${k.key}','reset-hwid')">Reset HWID</button>` : ''}
+                <button class="danger" onclick="del('${k.key}')">Del</button>
+            </div></td>
+        </tr>`;
+    }).join('');
+}
+function renderLogs(logs) {
+    const tb = document.getElementById('logsBody');
+    if (!logs.length) { tb.innerHTML = '<tr><td colspan="6" class="empty">Sem logs</td></tr>'; return; }
+    tb.innerHTML = logs.map(l => `<tr>
+        <td>${new Date(l.ts*1000).toLocaleString('pt-BR')}</td>
+        <td style="font-family:monospace;font-size:11px">${l.key||'-'}</td>
+        <td>${l.ip||'-'}</td>
+        <td title="${l.hwid||''}" style="font-family:monospace;font-size:11px">${l.hwid?l.hwid.substr(0,10)+'...':'-'}</td>
+        <td>${l.action}</td>
+        <td>${l.success ? '<span class="tag ok">OK</span>' : '<span class="tag err">'+l.detail+'</span>'}</td>
+    </tr>`).join('');
+}
+async function gerar() {
+    const type = document.getElementById('newType').value;
+    const days = parseInt(document.getElementById('newDays').value) || 30;
+    const note = document.getElementById('newNote').value;
+    const r = await api('/api/keys', { method:'POST', body:JSON.stringify({type,days,note}) });
+    if (r.key) {
+        navigator.clipboard.writeText(r.key);
+        alert('Chave gerada e copiada:\n\n' + r.key);
+        document.getElementById('newNote').value = '';
+        refresh();
+    }
+}
+async function action(key, act) {
+    await api(`/api/keys/${key}/${act}`, { method:'POST' });
+    refresh();
+}
+async function del(key) {
+    if (!confirm('Deletar chave permanentemente?')) return;
+    await api(`/api/keys/${key}`, { method:'DELETE' });
+    refresh();
+}
+function showTab(t) {
+    document.querySelectorAll('.tab').forEach(e=>e.classList.remove('active'));
+    event.target.classList.add('active');
+    document.getElementById('tab-keys').classList.toggle('hide', t!=='keys');
+    document.getElementById('tab-logs').classList.toggle('hide', t!=='logs');
+}
+function filterKeys() {
+    const q = document.getElementById('searchKey').value.trim().toLowerCase();
+    if (!q) { renderKeys(allKeys); return; }
+    const filtered = allKeys.filter(k =>
+        (k.key && k.key.toLowerCase().includes(q)) ||
+        (k.note && k.note.toLowerCase().includes(q)) ||
+        (k.hwid && k.hwid.toLowerCase().includes(q))
+    );
+    renderKeys(filtered);
+}
+
+if (token) showApp(); else showLogin();
+</script>
+</body>
+</html>
