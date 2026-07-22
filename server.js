@@ -395,6 +395,10 @@ app.post('/api/validate', async (req, res) => {
     }
 });
 
+app.get('/api/ping', (req, res) => {
+    res.json({ ok: true, ts: Math.floor(Date.now() / 1000) });
+});
+
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
@@ -410,6 +414,17 @@ initDB().then(() => {
         console.log('  Login Admin: ' + ADMIN_USER + ' / ' + ADMIN_PASS);
         console.log('================================================');
     });
+
+    // Self-ping a cada 4 minutos para manter Render acordado
+    const selfPingUrl = 'http://localhost:' + PORT + '/api/ping';
+    setInterval(() => {
+        const http = require('http');
+        http.get(selfPingUrl, (res) => {
+            console.log('[KEEP-ALIVE] ping:', res.statusCode);
+        }).on('error', (e) => {
+            console.log('[KEEP-ALIVE] err:', e.message);
+        });
+    }, 240000);
 }).catch(e => {
     console.error('Falha ao iniciar DB:', e);
     process.exit(1);
