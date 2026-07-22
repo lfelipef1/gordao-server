@@ -76,7 +76,15 @@ async function initDB() {
 
     const initSqlJs = require('sql.js');
     const SQL = await initSqlJs();
-    db = new SQL.Database();
+    const dbPath = path.join('/tmp', 'gordao.db');
+    let dbData = null;
+    try {
+        if (fs.existsSync(dbPath)) {
+            dbData = fs.readFileSync(dbPath);
+            console.log('[DB] Arquivo SQLite encontrado:', dbPath, '(' + dbData.length + ' bytes)');
+        }
+    } catch (e) { console.log('[DB] Nenhum arquivo SQLite anterior'); }
+    db = dbData ? new SQL.Database(dbData) : new SQL.Database();
     db.run(`
         CREATE TABLE IF NOT EXISTS keys (
             key TEXT PRIMARY KEY,
@@ -103,7 +111,16 @@ async function initDB() {
         );
         CREATE INDEX IF NOT EXISTS idx_logs_ts ON logs(ts DESC);
     `);
-    console.log('[DB] SQLite (sql.js) inicializado em memoria');
+    console.log('[DB] SQLite (sql.js) inicializado - arquivo:', dbPath);
+}
+
+function saveSQLite() {
+    if (usePostgres || !db) return;
+    try {
+        const data = db.export();
+        const buffer = Buffer.from(data);
+        fs.writeFileSync(path.join('/tmp', 'gordao.db'), buffer);
+    } catch (e) { console.error('[DB] Erro ao salvar SQLite:', e.message); }
 }
 
 // ============================================================
@@ -114,6 +131,7 @@ function sqliteExec(sql, params) {
     if (params && params.length) stmt.bind(params);
     stmt.step();
     stmt.free();
+    saveSQLite();
 }
 
 function sqliteGetOne(sql, params) {
