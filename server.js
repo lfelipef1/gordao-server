@@ -1,13 +1,14 @@
 // ============================================================
-// GORDAOMOD - API DE LICENCIAMENTO ONLINE v2.1
-// Storage: PostgreSQL (se DATABASE_URL existir) ou SQLite em memoria (sql.js)
-// Compativel com Render.com - nunca crasha por falta de DB
+// GORDAOMOD - API DE LICENCIAMENTO ONLINE v3.0
+// Features: products (spoofer/hack), HWID reset apos 1h, keep-alive
+// DB: PostgreSQL/Supabase (primario) + SQLite sql.js (fallback)
 // ============================================================
 const express = require('express');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const jwt = require('jsonwebtoken');
+const http = require('http');
 
 const PORT = process.env.PORT || 3000;
 const ADMIN_USER = process.env.ADMIN_USER || 'admin';
@@ -15,13 +16,13 @@ const ADMIN_PASS = process.env.ADMIN_PASS || 'gordao2025';
 const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
 const PAYLOAD_KEY = process.env.PAYLOAD_KEY || 'GordaoMod2025XY';
 const DATABASE_URL = process.env.DATABASE_URL;
+const HWID_RESET_HOURS = 1;
 
 // ============================================================
-// DATABASE LAYER - suporta Postgres (producao) e SQLite em memoria (fallback)
+// DATABASE LAYER
 // ============================================================
 let db;
 let usePostgres = false;
-let sqliteReady = false;
 
 async function initDB() {
     if (DATABASE_URL) {
@@ -34,13 +35,15 @@ async function initDB() {
                 idleTimeoutMillis: 30000,
                 connectionTimeoutMillis: 10000
             });
+            await db.query('SELECT 1');
             usePostgres = true;
-            console.log('[DB] PostgreSQL detectado - modo producao');
+            console.log('[DB] PostgreSQL conectado - modo producao');
 
             await db.query(`
                 CREATE TABLE IF NOT EXISTS keys (
                     key TEXT PRIMARY KEY,
                     type TEXT NOT NULL,
+                    product TEXT DEFAULT 'spoofer',
                     expires_at BIGINT,
                     hwid TEXT,
                     created_at BIGINT NOT NULL,
@@ -61,16 +64,16 @@ async function initDB() {
                     ts BIGINT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_logs_ts ON logs(ts DESC);
+                ALTER TABLE keys ADD COLUMN IF NOT EXISTS product TEXT DEFAULT 'spoofer';
             `);
             console.log('[DB] Tabelas Postgres verificadas');
             return;
         } catch (e) {
-            console.error('[DB] Erro init Postgres:', e.message, '- caindo pra SQLite');
+            console.error('[DB] Postgres falhou:', e.message, '- caindo para SQLite');
             usePostgres = false;
         }
     }
 
-    // SQLite em memoria via sql.js (sem compilação nativa)
     const initSqlJs = require('sql.js');
     const SQL = await initSqlJs();
     db = new SQL.Database();
@@ -78,6 +81,7 @@ async function initDB() {
         CREATE TABLE IF NOT EXISTS keys (
             key TEXT PRIMARY KEY,
             type TEXT NOT NULL,
+            product TEXT DEFAULT 'spoofer',
             expires_at INTEGER,
             hwid TEXT,
             created_at INTEGER NOT NULL,
@@ -99,27 +103,24 @@ async function initDB() {
         );
         CREATE INDEX IF NOT EXISTS idx_logs_ts ON logs(ts DESC);
     `);
-    sqliteReady = true;
     console.log('[DB] SQLite (sql.js) inicializado em memoria');
 }
 
 // ============================================================
-// DB HELPERS - abstrai Postgres vs SQLite
+// DB HELPERS
 // ============================================================
 function sqliteExec(sql, params) {
     const stmt = db.prepare(sql);
-    stmt.bind(params);
+    if (params && params.length) stmt.bind(params);
     stmt.step();
     stmt.free();
 }
 
 function sqliteGetOne(sql, params) {
     const stmt = db.prepare(sql);
-    stmt.bind(params);
+    if (params && params.length) stmt.bind(params);
     let row = null;
-    if (stmt.step()) {
-        row = stmt.getAsObject();
-    }
+    if (stmt.step()) row = stmt.getAsObject();
     stmt.free();
     return row;
 }
@@ -128,9 +129,7 @@ function sqliteGetAll(sql, params) {
     const stmt = db.prepare(sql);
     if (params && params.length) stmt.bind(params);
     const rows = [];
-    while (stmt.step()) {
-        rows.push(stmt.getAsObject());
-    }
+    while (stmt.step()) rows.push(stmt.getAsObject());
     stmt.free();
     return rows;
 }
@@ -139,18 +138,17 @@ async function dbGetKey(key) {
     if (usePostgres) {
         const r = await db.query('SELECT * FROM keys WHERE key=$1', [key]);
         return r.rows[0] || null;
-    } else {
-        return sqliteGetOne('SELECT * FROM keys WHERE key=?', [key]);
     }
+    return sqliteGetOne('SELECT * FROM keys WHERE key=?', [key]);
 }
 
-async function dbInsertKey(key, type, expires_at, created_at, note) {
+async function dbInsertKey(key, type, product, expires_at, created_at, note) {
     if (usePostgres) {
-        await db.query('INSERT INTO keys (key,type,expires_at,created_at,note) VALUES ($1,$2,$3,$4,$5)',
-            [key, type, expires_at, created_at, note || null]);
+        await db.query('INSERT INTO keys (key,type,product,expires_at,created_at,note) VALUES ($1,$2,$3,$4,$5,$6)',
+            [key, type, product || 'spoofer', expires_at, created_at, note || null]);
     } else {
-        sqliteExec('INSERT INTO keys (key,type,expires_at,created_at,note) VALUES (?,?,?,?,?)',
-            [key, type, expires_at, created_at, note || null]);
+        sqliteExec('INSERT INTO keys (key,type,product,expires_at,created_at,note) VALUES (?,?,?,?,?,?)',
+            [key, type, product || 'spoofer', expires_at, created_at, note || null]);
     }
 }
 
@@ -158,40 +156,36 @@ async function dbAllKeys() {
     if (usePostgres) {
         const r = await db.query('SELECT * FROM keys ORDER BY created_at DESC LIMIT 500');
         return r.rows.map(row => ({ ...row, revoked: !!row.revoked, use_count: row.use_count || 0 }));
-    } else {
-        return sqliteGetAll('SELECT * FROM keys ORDER BY created_at DESC LIMIT 500', [])
-            .map(r => ({ ...r, revoked: !!r.revoked, use_count: r.use_count || 0 }));
     }
+    return sqliteGetAll('SELECT * FROM keys ORDER BY created_at DESC LIMIT 500', [])
+        .map(r => ({ ...r, revoked: !!r.revoked, use_count: r.use_count || 0 }));
 }
 
 async function dbUpdateRevoked(key, revoked) {
     if (usePostgres) {
         const r = await db.query('UPDATE keys SET revoked=$1 WHERE key=$2', [revoked, key]);
         return r.rowCount > 0;
-    } else {
-        sqliteExec('UPDATE keys SET revoked=? WHERE key=?', [revoked ? 1 : 0, key]);
-        return db.getRowsModified() > 0;
     }
+    sqliteExec('UPDATE keys SET revoked=? WHERE key=?', [revoked ? 1 : 0, key]);
+    return db.getRowsModified() > 0;
 }
 
 async function dbResetHwid(key) {
     if (usePostgres) {
         const r = await db.query('UPDATE keys SET hwid=NULL WHERE key=$1', [key]);
         return r.rowCount > 0;
-    } else {
-        sqliteExec('UPDATE keys SET hwid=NULL WHERE key=?', [key]);
-        return db.getRowsModified() > 0;
     }
+    sqliteExec('UPDATE keys SET hwid=NULL WHERE key=?', [key]);
+    return db.getRowsModified() > 0;
 }
 
 async function dbDeleteKey(key) {
     if (usePostgres) {
         const r = await db.query('DELETE FROM keys WHERE key=$1', [key]);
         return r.rowCount > 0;
-    } else {
-        sqliteExec('DELETE FROM keys WHERE key=?', [key]);
-        return db.getRowsModified() > 0;
     }
+    sqliteExec('DELETE FROM keys WHERE key=?', [key]);
+    return db.getRowsModified() > 0;
 }
 
 async function dbSetHwid(key, hwid) {
@@ -217,9 +211,8 @@ async function dbAllLogs() {
     if (usePostgres) {
         const r = await db.query('SELECT * FROM logs ORDER BY ts DESC LIMIT 200');
         return r.rows;
-    } else {
-        return sqliteGetAll('SELECT * FROM logs ORDER BY ts DESC LIMIT 200', []);
     }
+    return sqliteGetAll('SELECT * FROM logs ORDER BY ts DESC LIMIT 200', []);
 }
 
 async function dbStats() {
@@ -228,13 +221,16 @@ async function dbStats() {
         const total = (await db.query('SELECT COUNT(*)::int AS c FROM keys')).rows[0].c;
         const ativas = (await db.query('SELECT COUNT(*)::int AS c FROM keys WHERE NOT revoked AND (expires_at IS NULL OR expires_at > $1)', [now])).rows[0].c;
         const usadas = (await db.query('SELECT COUNT(*)::int AS c FROM keys WHERE last_used_at IS NOT NULL')).rows[0].c;
-        return { total, ativas, usadas };
-    } else {
-        const total = sqliteGetOne('SELECT COUNT(*) as c FROM keys', []).c;
-        const ativas = sqliteGetOne('SELECT COUNT(*) as c FROM keys WHERE revoked=0 AND (expires_at IS NULL OR expires_at > ?)', [now]).c;
-        const usadas = sqliteGetOne('SELECT COUNT(*) as c FROM keys WHERE last_used_at IS NOT NULL', []).c;
-        return { total, ativas, usadas };
+        const spoofers = (await db.query("SELECT COUNT(*)::int AS c FROM keys WHERE product='spoofer'")).rows[0].c;
+        const hacks = (await db.query("SELECT COUNT(*)::int AS c FROM keys WHERE product='hack'")).rows[0].c;
+        return { total, ativas, usadas, spoofers, hacks };
     }
+    const total = sqliteGetOne('SELECT COUNT(*) as c FROM keys', []).c;
+    const ativas = sqliteGetOne('SELECT COUNT(*) as c FROM keys WHERE revoked=0 AND (expires_at IS NULL OR expires_at > ?)', [now]).c;
+    const usadas = sqliteGetOne('SELECT COUNT(*) as c FROM keys WHERE last_used_at IS NOT NULL', []).c;
+    const spoofers = sqliteGetOne("SELECT COUNT(*) as c FROM keys WHERE product='spoofer'", []).c;
+    const hacks = sqliteGetOne("SELECT COUNT(*) as c FROM keys WHERE product='hack'", []).c;
+    return { total, ativas, usadas, spoofers, hacks };
 }
 
 async function logEvent(key, ip, hwid, action, success, detail) {
@@ -271,7 +267,7 @@ function adminAuth(req, res, next) {
 }
 
 // ============================================================
-// ENDPOINTS
+// ENDPOINTS ADMIN
 // ============================================================
 app.post('/api/login', (req, res) => {
     const { user, pass } = req.body;
@@ -284,7 +280,7 @@ app.post('/api/login', (req, res) => {
 
 app.post('/api/keys', adminAuth, async (req, res) => {
     try {
-        const { type, days, note } = req.body;
+        const { type, product, days, note } = req.body;
         let expires_at = null;
         if (type === 'time') {
             if (!days || days < 1) return res.status(400).json({ error: 'days obrigatorio' });
@@ -294,15 +290,13 @@ app.post('/api/keys', adminAuth, async (req, res) => {
         }
         const key = genKey();
         const created_at = Math.floor(Date.now() / 1000);
-        await dbInsertKey(key, type, expires_at, created_at, note);
-        res.json({ key, type, expires_at, hwid: null, created_at, last_used_at: null, last_ip: null, use_count: 0, revoked: false, note });
+        await dbInsertKey(key, type, product, expires_at, created_at, note);
+        res.json({ key, type, product: product || 'spoofer', expires_at, hwid: null, created_at, last_used_at: null, last_ip: null, use_count: 0, revoked: false, note });
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get('/api/keys', adminAuth, async (req, res) => {
-    try {
-        res.json(await dbAllKeys());
-    } catch (e) { res.status(500).json({ error: e.message }); }
+    try { res.json(await dbAllKeys()); } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.post('/api/keys/:key/revoke', adminAuth, async (req, res) => {
@@ -322,22 +316,26 @@ app.delete('/api/keys/:key', adminAuth, async (req, res) => {
 });
 
 app.get('/api/logs', adminAuth, async (req, res) => {
-    try {
-        res.json(await dbAllLogs());
-    } catch (e) { res.status(500).json({ error: e.message }); }
+    try { res.json(await dbAllLogs()); } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get('/api/stats', adminAuth, async (req, res) => {
-    try {
-        res.json(await dbStats());
-    } catch (e) { res.status(500).json({ error: e.message }); }
+    try { res.json(await dbStats()); } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ============================================================
-// VALIDATE - endpoint principal do cliente
+// PING - keep alive
+// ============================================================
+app.get('/api/ping', (req, res) => {
+    res.json({ ok: true, ts: Math.floor(Date.now() / 1000), db: usePostgres ? 'postgres' : 'sqlite' });
+});
+
+// ============================================================
+// VALIDATE - endpoint principal
+// HWID reset apos 1h sem uso + suporte a products
 // ============================================================
 app.post('/api/validate', async (req, res) => {
-    let { key, hwid } = req.body;
+    let { key, hwid, product } = req.body;
     const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
 
     if (!key || !hwid) {
@@ -364,21 +362,37 @@ app.post('/api/validate', async (req, res) => {
             return res.status(403).json({ ok: false, error: 'Chave expirada' });
         }
 
-        if (!row.hwid) {
+        // HWID reset apos 1h sem uso
+        if (row.hwid && row.hwid !== hwid) {
+            const now = Math.floor(Date.now() / 1000);
+            const lastUsed = row.last_used_at || 0;
+            const hoursSinceUse = (now - lastUsed) / 3600;
+            if (hoursSinceUse >= HWID_RESET_HOURS) {
+                await dbSetHwid(key, hwid);
+                await logEvent(key, ip, hwid, 'hwid_reset', true, 'reset apos ' + HWID_RESET_HOURS + 'h sem uso');
+                console.log('[VALIDATE] HWID reset para chave', key);
+            } else {
+                await logEvent(key, ip, hwid, 'validate', false, 'hwid diferente');
+                const remaining = Math.ceil(HWID_RESET_HOURS - hoursSinceUse);
+                return res.status(403).json({ ok: false, error: 'Chave vinculada a outro PC. Aguarde ' + remaining + 'h para trocar.' });
+            }
+        } else if (!row.hwid) {
             await dbSetHwid(key, hwid);
-        } else if (row.hwid !== hwid) {
-            await logEvent(key, ip, hwid, 'validate', false, 'hwid diferente');
-            return res.status(403).json({ ok: false, error: 'Chave ja vinculada a outro PC' });
         }
 
         await dbUpdateUsage(key, ip);
         await logEvent(key, ip, hwid, 'validate', true, 'ok');
 
-        const payloadFile = path.join(__dirname, 'payload', 'spoofer.ps1');
-        if (!fs.existsSync(payloadFile)) {
+        const productName = row.product || 'spoofer';
+        const payloadFile = path.join(__dirname, 'payload', productName === 'hack' ? 'hack.ps1' : 'spoofer.ps1');
+        const fallback = path.join(__dirname, 'payload', 'spoofer.ps1');
+        const useFile = fs.existsSync(payloadFile) ? payloadFile : (fs.existsSync(fallback) ? fallback : null);
+
+        if (!useFile) {
             return res.status(500).json({ ok: false, error: 'Payload nao configurado no servidor' });
         }
-        const raw = fs.readFileSync(payloadFile);
+
+        const raw = fs.readFileSync(useFile);
         const dynKey = crypto.createHash('sha256').update(PAYLOAD_KEY + hwid + key).digest();
         const enc = Buffer.alloc(raw.length);
         for (let i = 0; i < raw.length; i++) enc[i] = raw[i] ^ dynKey[i % dynKey.length];
@@ -386,6 +400,7 @@ app.post('/api/validate', async (req, res) => {
         res.json({
             ok: true,
             type: row.type,
+            product: productName,
             expires_at: row.expires_at,
             payload: enc.toString('base64')
         });
@@ -395,30 +410,25 @@ app.post('/api/validate', async (req, res) => {
     }
 });
 
-app.get('/api/ping', (req, res) => {
-    res.json({ ok: true, ts: Math.floor(Date.now() / 1000) });
-});
-
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 // ============================================================
-// START
+// START + KEEP-ALIVE
 // ============================================================
 initDB().then(() => {
     app.listen(PORT, () => {
         console.log('================================================');
-        console.log('  GORDAOMOD - API ONLINE (' + (usePostgres ? 'PostgreSQL' : 'SQLite sql.js') + ')');
+        console.log('  GORDAOMOD - API v3.0 (' + (usePostgres ? 'PostgreSQL' : 'SQLite sql.js') + ')');
         console.log('  http://localhost:' + PORT);
-        console.log('  Login Admin: ' + ADMIN_USER + ' / ' + ADMIN_PASS);
+        console.log('  Admin: ' + ADMIN_USER + ' / ' + ADMIN_PASS);
+        console.log('  HWID reset: ' + HWID_RESET_HOURS + 'h sem uso');
         console.log('================================================');
     });
 
-    // Self-ping a cada 4 minutos para manter Render acordado
     const selfPingUrl = 'http://localhost:' + PORT + '/api/ping';
     setInterval(() => {
-        const http = require('http');
         http.get(selfPingUrl, (res) => {
             console.log('[KEEP-ALIVE] ping:', res.statusCode);
         }).on('error', (e) => {

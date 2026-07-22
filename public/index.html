@@ -107,6 +107,10 @@ th{color:var(--mut);font-weight:600;font-size:10px;text-transform:uppercase;lett
         <div class="card">
             <div class="section-title">Gerar Nova Chave</div>
             <div class="row">
+                <select id="newProduct">
+                    <option value="spoofer">Spoofer</option>
+                    <option value="hack">Hack</option>
+                </select>
                 <select id="newType">
                     <option value="time">Por dias</option>
                     <option value="unlimited">Ilimitada</option>
@@ -124,8 +128,8 @@ th{color:var(--mut);font-weight:600;font-size:10px;text-transform:uppercase;lett
             </div>
             <div class="scroll-x">
             <table>
-                <thead><tr><th>Chave</th><th>Tipo</th><th>Expira</th><th>HWID</th><th>Uso</th><th>Status</th><th>Nota</th><th></th></tr></thead>
-                <tbody id="keysBody"><tr><td colspan="8" class="empty">Carregando...</td></tr></tbody>
+                <thead><tr><th>Chave</th><th>Produto</th><th>Tipo</th><th>Expira</th><th>HWID</th><th>Uso</th><th>Status</th><th>Nota</th><th></th></tr></thead>
+                <tbody id="keysBody"><tr><td colspan="9" class="empty">Carregando...</td></tr></tbody>
             </table>
             </div>
         </div>
@@ -201,15 +205,18 @@ async function refresh() {
 }
 function renderKeys(keys) {
     const tb = document.getElementById('keysBody');
-    if (!keys.length) { tb.innerHTML = '<tr><td colspan="8" class="empty">Nenhuma chave ainda</td></tr>'; return; }
+    if (!keys.length) { tb.innerHTML = '<tr><td colspan="9" class="empty">Nenhuma chave ainda</td></tr>'; return; }
     tb.innerHTML = keys.map(k => {
         const exp = k.expires_at ? new Date(k.expires_at*1000).toLocaleString('pt-BR') : '∞';
         const now = Date.now()/1000;
         let status = '<span class="tag ok">Ativa</span>';
         if (k.revoked) status = '<span class="tag err">Revogada</span>';
         else if (k.expires_at && k.expires_at < now) status = '<span class="tag warn">Expirada</span>';
+        const prod = k.product || 'spoofer';
+        const prodTag = prod === 'hack' ? '<span class="tag warn">Hack</span>' : '<span class="tag ok">Spoofer</span>';
         return `<tr>
             <td class="key-col" title="${k.key}"><span class="copy" onclick="navigator.clipboard.writeText('${k.key}');this.textContent='Copiado';setTimeout(()=>this.textContent='${k.key}',1500)">${k.key}</span></td>
+            <td>${prodTag}</td>
             <td>${k.type === 'unlimited' ? '∞ Ilimitada' : 'Tempo'}</td>
             <td>${exp}</td>
             <td class="hwid-col" title="${k.hwid||''}">${k.hwid ? k.hwid.substr(0,12)+'...' : '<span style="color:var(--mut)">livre</span>'}</td>
@@ -238,9 +245,10 @@ function renderLogs(logs) {
 }
 async function gerar() {
     const type = document.getElementById('newType').value;
+    const product = document.getElementById('newProduct').value;
     const days = parseInt(document.getElementById('newDays').value) || 30;
     const note = document.getElementById('newNote').value;
-    const r = await api('/api/keys', { method:'POST', body:JSON.stringify({type,days,note}) });
+    const r = await api('/api/keys', { method:'POST', body:JSON.stringify({type,product,days,note}) });
     if (r.key) {
         navigator.clipboard.writeText(r.key);
         alert('Chave gerada e copiada:\n\n' + r.key);
